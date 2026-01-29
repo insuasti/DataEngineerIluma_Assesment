@@ -1,0 +1,57 @@
+services:
+  pgdatabase:
+    build:
+      context: ./database
+      dockerfile: Dockerfile
+    environment:
+      POSTGRES_USER: "root"
+      POSTGRES_PASSWORD: "root"
+      POSTGRES_DB: "data_jobs"
+    volumes:
+      - data_jobs_postgres_data:/var/lib/postgresql
+    ports:
+      - "5432:5432"
+    networks:
+      - data-network
+
+  pgadmin:
+    image: dpage/pgadmin4
+    depends_on:
+      - pgdatabase
+    environment:
+      PGADMIN_DEFAULT_EMAIL: "admin@admin.com"
+      PGADMIN_DEFAULT_PASSWORD: "root"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    ports:
+      - "8085:80"
+    networks:
+      - data-network
+
+  ingest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - pgdatabase
+    environment:
+      - PGHOST=pgdatabase
+    volumes:
+      - ./data/source/data_jobs.csv:/code/data/source/data_jobs.csv:ro
+    networks:
+      - data-network
+    command:
+      - --pg-host=pgdatabase
+      - --pg-user=root
+      - --pg-pass=root
+      - --pg-db=data_jobs
+      - --csv-file=/code/data/source/data_jobs.csv
+      - --target-table=data_jobs
+
+networks:
+  data-network:
+    driver: bridge
+
+volumes:
+  data_jobs_postgres_data:
+  pgadmin_data:
