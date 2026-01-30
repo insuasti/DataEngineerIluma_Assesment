@@ -6,70 +6,128 @@ This project ingests job data from a local CSV file into PostgreSQL using Docker
 
 **[↑ Up](README.md)** | **[← Previous](03-ProjectStructure.md)** | **[Next →](05-ConceptualOlapModel.md)**
 
-# ✅ Data Engineer Technical Assessment — Checklist
+# ✅ Database Models and Design
 
-## Phase 1 — Ingestion
+- 0 Original database model loaded into PostgreSQL.
+- 1 3rd Normal Form (3NF) normalized model.
+- 2 Handling semi-structured data (lists and dictionaries): resolving many-to-many relationships using bridge tables.
 
-- [x] Create a **Python script** to read `data_jobs.csv` and **load it into a database table** (initial/raw table)
-- [x] Use **PostgreSQL with Docker Compose** (preferred) **OR** use another DB (e.g., SQLite) **and justify the choice**
-- [x] Correctly ingest **semi-structured columns** and store them in appropriate formats/data types:
-  - [x] `job_skills` (lists)
-  - [x] `job_type_skills` (dictionaries)
+### - 0 Original database model loaded into PostgreSQL.
 
----
+For this project, it was defined that the entire solution would be deployed in a **containerized** setup—running all **Python scripts in an isolated container**, and using a **containerized PostgreSQL database** as well.
 
-## Phase 2 — 3NF Relational Model (Core of the test)
+At the moment, the **raw database** is loaded into a **PostgreSQL container volume**, due to the **technical requirement** stated in the exercise.
 
-- [ ] ***implementing*** **Design + implement** the transformation from the initial/raw table into a **3NF model**
-- [ ] ***implementing*** Use an implementation approach: **Python**, **dbt**, **raw SQL**, or a mix
-- [x] Ensure the 3NF model includes:
-  - [x] **Separate tables for main entities** (Jobs, Companies, Skills, Locations, etc.) with **foreign keys**
-  - [x] Correct **many-to-many** relationship between **Jobs ↔ Skills**
-  - [ ] ***implementing*** **Cleaning & standardization** to unify / clean the data
+Since this could also be considered a **staging dataset/table**, it would have been possible to use **DuckDB** instead, which is **highly efficient for this type of workload** and **faster to implement**. It offers **SQLite-like portability**, but is **significantly faster** and **designed for analytics-oriented use cases**.
 
----
+Because this is the **first ingestion into a raw database**, it could even be considered a **Bronze layer**. In this step, the fields **`job_skills`** and **`job_type_skills`** are loaded **as text**.
 
-## Required Deliverables
+The **SQL structure** of the raw database is the following:
 
-- [x] Provide an **ERD** (e.g., dbdiagram.io) **OR** a **`schema.sql`** with the DDL of your 3NF model
-- [x] Submit as a **Git repository** with **clean + semantic commit history**
-- [x] Include dependency management via **`requirements.txt`** *(Poetry/PDM/uv is a plus)*
-- [ ] Add **tests**:
-  - [ ] **Unit tests with pytest** for critical functions (transformation/extraction logic)
-- [x] Create a **README.md** (documentation is a *fundamental deliverable*)
+![data_jobs](data_jobs.png). 
 
----
+And it is loaded through the container (we also use **pgAdmin**, which is containerized as well, to inspect the database).
 
-## Bonus / Extra Points (Nice-to-have)
+![data_jobs_loaded_in_container](data_jobs_loaded_in_container.png)
 
-- [ ] **Data quality tests** (dbt tests, or Pandera / Great Expectations in Python)
-- [ ] **Security/configuration**: no hardcoded credentials, use **environment variables / .env**
-- [ ] Add **logging** to track pipeline execution
-- [ ] In README, include:
-  - [ ] design decisions/justifications
-  - [x] execution instructions
-  - [ ] how to run tests
-- [ ] **Orchestration** (Airflow/Prefect/Dagster) and **CI/CD** (GitHub Actions for linting/testing) *(not required to implement, but a plus)*
+For this process, the `ingest_data.py` script was used.
 
----
 
-## Bonus — Conceptual OLAP Model (Star Schema)
+### - 1 3rd Normal Form (3NF) normalized model.
 
-In your README, **describe** how you would design a Star Schema from your 3NF model:
+Then, the ETL process loads the tables. Initially, we have the following design to comply with **3NF**:
 
-- [x] Fact table + **granularity**
-- [x] Dimensions (e.g., `dim_company`, `dim_date`)
-- [x] Measures (key numeric metrics)
-- [x] Also explain how you would handle:
-  - [x] `job_skills` using a **bridge table**
-  - [x] multiple boolean flags using a **junk dimension**
+![3NFDataJobsBridgeModel](3NFDataJobsBridgeModel.svg)
 
----
+Regarding the **3NF model and structure**, for each variable we created a mapping indicating where each attribute will be placed:
 
-## Submission
+| Column Name             | Description                                            | Type        | Source           | Destiny `{attributeNewName} -> TableLocation`         | How to Access from fact                                |
+| ----------------------- | ------------------------------------------------------ | ----------- | ---------------- | ----------------------------------------------------- | ------------------------------------------------------ |
+| `job_title_short`       | Cleaned/standardized job title (e.g., Data Scientist). | Calculated  | From `job_title` | `job_title_short` -> `dim_job_titles`                 | `job_title_id`                                         |
+| `job_title`             | Full original job title as scraped.                    | Raw         | Scraped          | Deleted                                               | Deleted                                                |
+| `job_location`          | Location string shown in the job posting.              | Raw         | Scraped          | `location` -> `dim_locations`                         | `posting_location_id`                                  |
+| `job_via`               | Platform where the job was posted (e.g., LinkedIn).    | Raw         | Scraped          | `platform_name` -> `dim_platforms`                    | `platform_id`                                          |
+| `job_schedule_type`     | Type of schedule (Full-time, Contractor, etc.).        | Raw         | Scraped          | `schedule_types_name` -> `dim_schedule_types`         | `schedule_type_id`                                     |
+| `job_work_from_home`    | Indicates whether the job is remote (true/false).      | Boolean     | Parsed           | `job_work_from_home` -> `fact_jobs_searched`          | Direct in the FACT                                     |
+| `search_location`       | Location used for the search that generated the data.  | Generated   | Bot logic        | `location` -> `dim_locations`                         | `searching_location_id`                                |
+| `job_posted_date`       | Date and time when the job was posted.                 | Raw         | Scraped          | `full_date`, `full_hour` -> `dim_date` and `dim_time` | `posted_date_id`, `posted_time_id`                     |
+| `job_no_degree_mention` | Indicates if "no degree required" is mentioned.        | Boolean     | Parsed           | `job_no_degree_mention` -> `fact_jobs_searched`       | Direct in the FACT                                     |
+| `job_health_insurance`  | Indicates if the posting mentions health insurance.    | Boolean     | Parsed           | `job_health_insurance` -> `fact_jobs_searched`        | Direct in the FACT                                     |
+| `job_country`           | Country extracted from the location.                   | Calculated  | Parsed           | `country` -> `dim_locations`                          | `posting_location_id`                                  |
+| `salary_rate`           | Indicates if the salary is annual or hourly.           | Raw         | Scraped          | `salary_rate` -> `fact_salarys_searched`              | Direct in the FACT                                     |
+| `salary_year_avg`       | Average yearly salary (calculated).                    | Calculated  | Derived          | `salary_year_avg` -> `fact_salarys_searched`          | Direct in the FACT                                     |
+| `salary_hour_avg`       | Average hourly salary (calculated).                    | Calculated  | Derived          | `salary_hour_avg` -> `fact_salarys_searched`          | Direct in the FACT                                     |
+| `company_name`          | Name of the company posting the job.                   | Raw         | Scraped          | `company_name` -> `fact_companys_searched`            | `company_id`                                           |
+| `job_skills`            | (Key) List of skills (e.g., `['Python', 'SQL']`).      | Parsed List | NLP Extracted    | `job_skills` -> `bridge_job_skills`                   | `fact_jobs_searched_id` join `bridge_job_skills`       |
+| `job_type_skills`       | (Key) Dictionary grouping skills by type.              | Parsed Dict | NLP Extracted    | `job_type_skills` -> `bridge_skill_categories`        | `fact_jobs_searched_id` join `bridge_skill_categories` |
 
-- [x] Deliverable: **link to your Git repository**
+And the **3NF database structure** is also loaded within the container.
 
+DataJobsAnalytics3NF
+![data_jobs_analitics3NF](data_jobs_analitics3NF.png)
+### Model Tables
+
+| Table | Type | Description |
+|-------|------|-------------|
+| `dim_companies` | Dimension | Companies that publish job postings |
+| `dim_locations` | Dimension | Geographic locations |
+| `dim_platforms` | Dimension | Job platforms (LinkedIn, Indeed) |
+| `dim_schedule_types` | Dimension | Schedule types (Full-time, Part-time) |
+| `dim_skills` | Dimension | Technical and professional skills |
+| `dim_skill_categories` | Dimension | Skill categories |
+| `dim_job_titles` | Dimension | Normalized job titles |
+| `dim_salary_rates` | Dimension | Salary rate types (annual, hourly) |
+| `dim_date` | Dimension | Dates for time-based analysis |
+| `fact_jobs` | Fact | Central table for job postings |
+| `bridge_job_skills` | Bridge | N:M relationship between jobs and skills |
+| `bridge_skill_categories` | Bridge | N:M relationship between skills and categories |
+
+## Design Decisions
+
+###  Why 3NF?
+
+**Third Normal Form (3NF)** was chosen because it:
+
+- **Eliminates redundancy**: Company, location, and skill data is not duplicated
+- **Maintains integrity**: Foreign keys (FKs) ensure referential consistency
+- **Improves maintainability**: Updating a company automatically affects all related jobs
+- **Foundation for OLAP**: A well-designed 3NF model can be easily transformed into a Star Schema
+
+
+### - 2 Handling semi-structured data (lists and dictionaries): resolving many-to-many relationships using bridge tables.
+
+
+In the raw layer, we chose to load these fields as **text** (even though PostgreSQL has explicit data types for lists and dictionaries, and they can also be queried similarly to NoSQL-style queries). The relationship handling will be implemented through **bridge tables**.
+
+
+
+#### `job_skills` (List)
+```python
+# Input: "['Python', 'SQL', 'Spark']"
+# Output: bridge_job_skills table with one row per skill
+```
+
+Decision: Use a bridge table to resolve the many-to-many relationship, enabling:
+
+- Efficient skill-based queries
+
+- Analysis of the most in-demand skills
+
+- Indexing by skill_id
+
+#### `job_type_skills` (Dictionary)
+
+```python
+# Input: "{'programming': ['Python'], 'cloud': ['AWS']}"
+# Output:
+#   - dim_skill_categories with unique categories
+#   - bridge_skill_categories relating skills to their categories
+```
+
+Decision: Create a separate dimension for categories, enabling analysis by skill type.
+
+
+ 
 
 **[↑ Up](README.md)** | **[← Previous](03-ProjectStructure.md)** | **[Next →](05-ConceptualOlapModel.md)**
 
